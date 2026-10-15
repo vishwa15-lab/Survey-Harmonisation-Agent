@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Survey Harmonization Agent
 
 An agent system that maps messy, country-specific health survey files onto a fixed standard
@@ -99,3 +100,7 @@ src/harmonizer/  schema, units, mapping, checks, synthetic, tools, agents_def, p
 mcp_server/      optional MCP server wrapping the deterministic tools
 tests/           25 tests
 ```
+=======
+# Survey-Harmonisation-Agent
+An agent workflow that maps messy health survey files into a fixed standard schema (variable names, units)
+>>>>>>> c01b11b47fb0bd029790198e7a246a9a83cc129a
