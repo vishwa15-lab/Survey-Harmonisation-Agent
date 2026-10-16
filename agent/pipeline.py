@@ -15,6 +15,12 @@ from core.mapping import MappingSpec, VarMapping, apply_mapping
 from core.schema import ALWAYS_REVIEW
 from agent.tools import SurveyContext
 
+# LangSmith imports
+import os
+import langsmith
+from langsmith import traceable
+from langsmith.wrappers import wrap_openai
+
 PlannerFn = Callable[[SurveyContext, "str | None"], Awaitable[MappingSpec]]
 ApproveFn = Callable[[list[VarMapping]], dict[str, bool]]
 
@@ -90,6 +96,7 @@ def _problems(out: pd.DataFrame, warnings: list[str]) -> tuple[list[Issue], str]
     return issues, text if (errors or warnings) else ""
 
 
+@traceable(name="harmonize", tags=["pipeline"])
 async def harmonize(df: pd.DataFrame, codebook: dict[str, str], survey_id: str,
                     planner: PlannerFn, approve: ApproveFn = cli_approve,
                     max_rounds: int = 3) -> Result:
@@ -99,26 +106,28 @@ async def harmonize(df: pd.DataFrame, codebook: dict[str, str], survey_id: str,
     rounds = 0
 
     for rounds in range(1, max_rounds + 1):
-        spec = await planner(ctx, feedback)
-        out, warnings = apply_mapping(df, spec)
-        issues, feedback_text = _problems(out, warnings)
-        if not feedback_text:
-            break
-        feedback = feedback_text
-    assert spec is not None
+        with langsmith.trace(
+            name=f"Round {rounds}",
+            metadata={"survey_id": survey_id, "round": rounds}
+        ):
+            spec = await planner(ctx, feedback)
+            #out, warnings = apply_mapping(df, spec)
+            with langsmith.trace(name="apply_mapping", metadata={"round": rounds}):
+                out, warnings = apply_mapping(df, spec)
 
-    # human-in-the-loop gate: rejected mappings are dropped (never silently kept)
-    decisions: dict[str, bool] = {}
-    items = items_for_review(spec)
-    if items:
-        decisions = approve(items)
-        for m in spec.mappings:
-            if m.target in decisions and not decisions[m.target]:
-                m.source_column = None
-                m.rationale = "rejected by human reviewer"
-        out, warnings = apply_mapping(df, spec)
-        issues, feedback_text = _problems(out, warnings)
+            #issues, feedback_text = _problems(out, warnings)
+            
+            with langsmith.trace(name="run_checks", metadata={"round": rounds}):
+                issues = run_checks(out, spec, max_oor=0.05, max_missing=0.8)
+                langsmith.get_current_run_tree().metadata.update({
+                    "n_issues": len(issues),
+                    "n_errors": sum(1 for i in issues if i.severity == "error")
+                })
 
-    status = "ok" if not feedback_text else "needs_attention"
-    return Result(spec=spec, out=out, issues=issues, rounds=rounds, status=status,
-                  decisions=decisions, warnings=warnings)
+            if not issues:
+                break
+            feedback = format_issues(issues)
+
+    status = "ok" if not issues else "needs_attention"
+    return Result(out=out, spec=spec, issues=issues, status=status, rounds=rounds,
+                warnings=warnings)

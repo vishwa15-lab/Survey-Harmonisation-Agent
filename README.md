@@ -1,13 +1,13 @@
-# Survey Harmonization Agent
+# Survey Harmonisation Agent
 
-An agent system that maps messy, country-specific health survey files onto a fixed standard
-schema (variable names, units, coding), validates the result, and asks a human about judgment
-calls. Built on the **OpenAI Agents SDK** (pinned `0.23.1`; the SDK is pre-1.0, so upgrade deliberately).
+An agent that maps messy, country-specific health survey files onto a fixed standard schema
+(variable names, units, coding), validates the result, and asks a human about judgment calls.
+Built on the **OpenAI Agents SDK** (pinned `0.23.1`; the SDK is pre-1.0, so upgrade deliberately).
 
-Uses **synthetic data only**. No real survey data, internal documents or restricted datasets are
-included, and none should be committed.
+Uses **synthetic data only**. No real survey data or restricted datasets are included, and none
+should be committed.
 
-## Design in one picture
+## How it works
 
 ```
 raw survey + codebook
@@ -15,7 +15,7 @@ raw survey + codebook
    [Planner agent]  --tools-->  list_columns, describe_column, search_codebook,
         |                       list_standard_variables, try_mapping
         v
-   MappingSpec (declarative JSON, strict schema)
+   MappingSpec (declarative JSON, strict Pydantic schema)
         |
    [apply_mapping]  deterministic executor (units, recodes, missing codes, skip patterns)
         |
@@ -27,76 +27,129 @@ raw survey + codebook
    harmonized.csv + mapping.json + issues.json
 ```
 
-**Key decision:** the model proposes a *declarative* mapping; plain code applies it. The LLM never
-executes code on the data, every transformation is auditable and replayable, and the Validator's
-quality does not depend on the model.
+The model proposes a declarative mapping. Plain Python applies it. The LLM never executes
+code on the data — every transformation is auditable and replayable, and the Validator's
+quality does not depend on the model's confidence score.
 
 ## Setup
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
-pytest
+cp .env.example .env             # add your API key and model name
+pytest tests/ -v
 ```
 
-`HARMONIZER_MODEL_PLANNER` is deliberately not defaulted: model names and prices change, so pick
-one from OpenAI's current models page. Start with a cheaper model and compare before moving up.
+`HARMONIZER_MODEL_PLANNER` is deliberately not defaulted. Model names and prices change,
+so pick one explicitly from OpenAI's current models page. Start cheaper, move up if needed.
+
+## Environment variables
+
+```bash
+# .env
+OPENAI_API_KEY=sk-...
+HARMONIZER_MODEL_PLANNER=gpt-4o
+
+# LangSmith tracing (optional but recommended)
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=ls__...
+LANGCHAIN_PROJECT=survey-harmonizer
+```
 
 ## Run
 
 ```bash
-# no API calls: uses the ground-truth mapping to prove the pipeline and scoring work
-python -m harmonizer.cli eval --oracle
+# no API calls — uses ground-truth mapping to prove the pipeline works
+python main.py eval --oracle
 
-# real agent run on one synthetic survey (needs OPENAI_API_KEY + model name)
-python -m harmonizer.cli run A
+# real agent run on one survey (needs OPENAI_API_KEY + model name)
+python main.py run A
 
-# all three surveys, non-interactive approval
-python -m harmonizer.cli eval --auto-approve
+# all three surveys, skip human approval prompts
+python main.py eval --auto-approve
 ```
 
-Outputs go to `runs/<survey>/` (`harmonized.csv`, `mapping.json`, `issues.json`) and
-`runs/eval_results.json`.
+Outputs go to `runs/<survey>/` — `harmonized.csv`, `mapping.json`, `issues.json` — and
+`runs/eval_results.json` for the full eval table.
+
+## Docker
+
+```bash
+# build
+docker compose build
+
+# oracle eval — no API key needed
+docker compose run harmonizer-oracle
+
+# real LLM run — needs .env with API key
+docker compose run harmonizer-live
+
+# run tests inside container
+docker compose run harmonizer-test
+```
+
+## LangSmith tracing
+
+Add the three `LANGCHAIN_*` variables to your `.env` and run any command. Every LLM call,
+tool call, round and human gate step appears as a trace in your LangSmith project. Useful for
+seeing exactly which tool calls happened, how many tokens each round used, and where retries
+were triggered.
+
+Go to https://smith.langchain.com to view traces.
 
 ## The three synthetic surveys
 
 | Survey | What makes it hard |
 |---|---|
-| A | cryptic column names, mg/dL lipids and glucose, 1/2 yes-no coding, HbA1c not collected |
-| B | M/F and Y/N letter codes, height in inches, weight in lb, HbA1c in mmol/mol |
-| C | reversed sex coding (1 = female), height in metres, 999 as a missing code |
+| A | cryptic column names (h1, g7, l1), mg/dL lipids and glucose, 1/2 yes-no coding, HbA1c not collected |
+| B | M/F and Y/N letter codes, height in inches, weight in lb, HbA1c in mmol/mol (IFCC) |
+| C | reversed sex coding (1 = female), height in metres, 999 as missing code, mixed units |
 
-Weight in lb is a deliberate trap: 170 lb is a plausible kg value, so the Validator cannot catch
-it. Only reading the codebook can.
+Survey A takes up to 3 rounds because the cryptic column names and reversed coding trigger
+validator errors that need correcting. B and C resolve in 1 round.
+
+Weight in lb is a deliberate trap: 170 lb is a plausible kg value, so the Validator cannot
+catch it from values alone. Only reading the codebook can — this tests whether the agent
+actually reads the codebook rather than guessing from data.
 
 ## Metrics
 
-`mapping_acc` (right raw column), `unit_acc` (right source unit), `value_acc` (harmonized values
-match ground truth: continuous within 3%, binary exact).
-
-## Status: what is and is not verified
-
-| Part | Status |
+| Metric | What it measures |
 |---|---|
-| Schema, units, mapping executor, Validator, synthetic data, scoring | Unit-tested (25 tests passing) |
-| Pipeline loop, feedback retries, human rejection, MCP tools | Tested with injected planners (no API) |
-| Agent definition and tool schemas | Built and schema-checked against the SDK |
-| **Live LLM runs (Planner calling OpenAI)** | **Not yet run.** Needs your API key; expect to tune the instructions |
+| `mapping_acc` | did the agent pick the right source column? |
+| `unit_acc` | did it identify the right source unit? |
+| `value_acc` | are output values within 3% of ground truth (continuous) or exact (binary)? |
 
-## Roadmap
-
-1. Run live on survey A, then B and C; record `eval_results.json` as your baseline.
-2. Swap `search_codebook` keyword search for embeddings (Chroma/FAISS) via LlamaIndex.
-3. Connect the MCP server (`mcp_server/server.py`) to the Planner with `MCPServerStdio`.
-4. Add an LLM-as-judge for rationale quality; compare small vs large planner models.
-5. Add NHANES as a real public dataset (check its terms; do not commit raw data).
-6. Optional: LangGraph comparison branch; Docker; demo video.
-
-## Layout
+Current oracle results (ground-truth mapping, no LLM):
 
 ```
-src/harmonizer/  schema, units, mapping, checks, synthetic, tools, agents_def, pipeline, evals, cli
-mcp_server/      optional MCP server wrapping the deterministic tools
-tests/           25 tests
+survey  status           rounds  mapping  units  values
+A       needs_attention  3       100%     100%   100%
+B       ok               1       100%     100%   100%
+C       ok               1       100%     100%   100%
 ```
 
+`needs_attention` on Survey A means `htn_treated` and `dm_treated` were flagged for human
+review — this is expected. These variables are in `ALWAYS_REVIEW` by design.
+
+## Why confidence scores are not trusted
+
+The `confidence` field in each `VarMapping` is generated by the LLM the same way as any
+other token — it is not a calibrated probability. A model can output `confidence: 0.95` on a
+completely wrong mapping. The Validator ignores it entirely and checks actual output values
+against plausible clinical ranges. The human gate for judgment calls fires regardless of
+confidence.
+
+## Project layout
+
+```
+agent/          planner agent definition, tools, pipeline orchestrator
+core/           deterministic executor — mapping, checks, schema, units
+evals/          scoring metrics, synthetic survey generator
+mcp_server/     optional MCP server exposing tools to external clients
+tests/          25 tests across 4 files (no API calls needed to run)
+main.py         CLI entry point
+Dockerfile      container build
+docker-compose.yml  oracle, live and test services
+```

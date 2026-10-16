@@ -1,0 +1,31 @@
+# Virtual environment — never copy into image
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Secrets — never copy into image
+.env
+
+# Git
+.git/
+.gitignore
+
+# Output files — mounted as volume instead
+runs/
+
+# Local database
+data/sessions.db
+
+# Build artefacts
+*.egg-info/
+dist/
+
+# OS files
+.DS_Store
+
+# Docs
+docs/
+*.md

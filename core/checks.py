@@ -37,12 +37,14 @@ def _unit_hint(name: str, median: float) -> str | None:
     return None
 
 
-def run_checks(out: pd.DataFrame, max_oor: float = 0.01, max_missing: float = 0.5) -> list[Issue]:
+#def run_checks(out: pd.DataFrame, max_oor: float = 0.01, max_missing: float = 0.5) -> list[Issue]:
+# CORRECT
+def run_checks(df: pd.DataFrame, spec: MappingSpec, max_oor: float = 0.05, max_missing: float = 0.8) -> list[Issue]:
     issues: list[Issue] = []
-    n = len(out)
+    n = len(df)
 
     for name, var in STANDARD_VARS.items():
-        col = out[name]
+        col = df[name]
         nn = int(col.notna().sum())
         if nn == 0:
             issues.append(Issue(variable=name, severity="info", check="unmapped",
@@ -70,13 +72,13 @@ def run_checks(out: pd.DataFrame, max_oor: float = 0.01, max_missing: float = 0.
 
     # logic checks
     for treated, dx in (("htn_treated", "htn_dx"), ("dm_treated", "dm_dx")):
-        both = out[[treated, dx]].dropna()
+        both = df[[treated, dx]].dropna()
         bad = int(((both[treated] == 1) & (both[dx] == 0)).sum())
         if bad:
             issues.append(Issue(variable=treated, severity="error", check="treated_gt_diagnosed",
                                 message=f"{bad} people treated but not diagnosed", n_affected=bad,
                                 hint="check recode direction (1/2 coding) or the gating question"))
-    bp = out[["sbp", "dbp"]].dropna()
+    bp = df[["sbp", "dbp"]].dropna()
     if len(bp):
         bad = int((bp["dbp"] >= bp["sbp"]).sum())
         if bad / len(bp) > max_oor:

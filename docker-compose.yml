@@ -1,0 +1,44 @@
+services:
+
+  # ── Oracle eval — no API key needed, runs immediately ─────────────────────
+  harmonizer-oracle:
+    build: .
+    container_name: harmonizer-oracle
+    command: python main.py eval --oracle
+    volumes:
+      # Mount runs/ so output files appear on your local machine
+      - ./runs:/app/runs
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  # ── Live eval — needs real OpenAI API key ─────────────────────────────────
+  harmonizer-live:
+    build: .
+    container_name: harmonizer-live
+    command: python main.py eval
+    volumes:
+      - ./runs:/app/runs
+    env_file:
+      # Reads OPENAI_API_KEY and HARMONIZER_MODEL_PLANNER from your .env file
+      # .env is never copied into the image — stays on your machine only
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  # ── Run single survey ─────────────────────────────────────────────────────
+  harmonizer-run:
+    build: .
+    container_name: harmonizer-run
+    command: python main.py run A --oracle
+    volumes:
+      - ./runs:/app/runs
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  # ── Tests ─────────────────────────────────────────────────────────────────
+  harmonizer-test:
+    build: .
+    container_name: harmonizer-test
+    command: pytest tests/ -v
+    environment:
+      - PYTHONUNBUFFERED=1

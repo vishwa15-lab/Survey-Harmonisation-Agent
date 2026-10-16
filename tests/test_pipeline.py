@@ -6,7 +6,6 @@ from evals.evals import score
 from agent.pipeline import auto_approve, harmonize, items_for_review, oracle_planner
 from evals.synthetic import SURVEY_IDS, make_survey
 
-
 def run(coro):
     return asyncio.run(coro)
 
